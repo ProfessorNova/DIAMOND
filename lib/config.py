@@ -25,7 +25,6 @@ class Config:
     # Sequence construction during training
     diffusion_model_number_of_conditioning_observations_and_actions: int = 4
     reward_termination_model_burn_in_length: int = diffusion_model_number_of_conditioning_observations_and_actions
-    reward_termination_model_training_sequence_length: int = reward_termination_model_burn_in_length + imagination_horizon
     actor_critic_model_burn_in_length: int = diffusion_model_number_of_conditioning_observations_and_actions
 
     # Optimization
@@ -40,3 +39,20 @@ class Config:
     P_mean: float = -0.4
     P_std: float = 1.2
     sigma_data: float = 0.5
+
+    # --- Architecture details ---
+    # Diffusion Model
+    diffusion_model_residual_blocks_layers = [2, 2, 2, 2]
+    diffusion_model_residual_blocks_channels = [64, 64, 64, 64]
+    diffusion_model_residual_blocks_conditioning_dimensions = 256
+
+    # Reward/Termination Model
+    reward_termination_model_residual_blocks_layers = [2, 2, 2, 2]
+    reward_termination_model_residual_blocks_channels = [32, 32, 32, 32]
+    reward_termination_model_residual_blocks_conditioning_dimensions = 128
+    reward_termination_model_lstm_dimension = 128
+
+    # Actor-Critic Model
+    actor_critic_model_residual_blocks_layers = [1, 1, 1, 1]
+    actor_critic_model_residual_blocks_channels = [32, 32, 64, 64]
+    actor_critic_model_lstm_dimension = 512
