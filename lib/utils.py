@@ -1,11 +1,29 @@
 import gymnasium as gym
+import numpy as np
 import torch
 
 from lib.config import Config
 
 
+class ImageToPyTorch(gym.ObservationWrapper):
+    """HWC -> CHW for PyTorch, keeps dtype uint8."""
+
+    def __init__(self, env):
+        super().__init__(env)
+        h, w, c = self.observation_space.shape
+        self.observation_space = gym.spaces.Box(
+            low=0, high=255, shape=(c, h, w), dtype=np.uint8
+        )
+
+    def observation(self, observation):
+        return np.transpose(observation, (2, 0, 1))
+
+
 def make_env(cfg: Config) -> gym.Env:
-    raise NotImplementedError
+    env = gym.make(cfg.env_id)
+    env = gym.wrappers.ResizeObservation(env, cfg.image_size)
+    env = ImageToPyTorch(env)
+    return env
 
 
 def lambda_returns(

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Tuple
 
 import torch
 
@@ -7,6 +8,8 @@ import torch
 class Config:
     # --- General Settings ---
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    env_id: str = "Breakout-v4"
+    image_size: Tuple[int, int] = (64, 64)
 
     # --- Hyperparameters ---
     # Training loop
