@@ -23,8 +23,8 @@ class ActorCritic(nn.Module):
             self,
             obs_shape: Tuple[int, ...],
             num_actions: int,
-            residual_blocks_layers: List[int, ...],
-            residual_blocks_channels: List[int, ...],
+            residual_blocks_layers: List[int],
+            residual_blocks_channels: List[int],
             lstm_dimensions: int,
     ):
         super(ActorCritic, self).__init__()
@@ -38,45 +38,38 @@ class ActorCritic(nn.Module):
             layers_list.append(nn.MaxPool2d(kernel_size=2, stride=2))
             in_channels = block_channels
         self.conv_trunk = nn.Sequential(*layers_list)
+        conv_output_size = self._get_conv_output_size(obs_shape)
 
         # LSTM
-        self.lstm = nn.LSTM(in_channels, lstm_dimensions, batch_first=True)
+        self.lstm = nn.LSTM(conv_output_size, lstm_dimensions, batch_first=True)
 
         # Heads
         self.policy_head = nn.Linear(lstm_dimensions, num_actions)
         self.value_head = nn.Linear(lstm_dimensions, 1)
 
-        # Initialize heads
-        nn.init.zeros_(self.policy_head.weight)
+        # Initialize Heads
+        nn.init.normal_(self.policy_head.weight, std=0.01)
         nn.init.zeros_(self.policy_head.bias)
-        nn.init.zeros_(self.value_head.weight)
+        nn.init.orthogonal_(self.value_head.weight, gain=1.0)
         nn.init.zeros_(self.value_head.bias)
 
-    def _preprocess(self, obs: Union[torch.Tensor, np.ndarray]) -> torch.Tensor:
-        device = next(self.parameters()).device
-
-        x = torch.from_numpy(obs) if isinstance(obs, np.ndarray) else obs
-
-        # Convert to float in [0,1] if needed
-        if x.dtype == torch.uint8:
-            x = x.float().div(255.0)
-        else:
-            x = x.float()
-
-        return x.to(device)
+    def _get_conv_output_size(self, obs_shape: Tuple[int, ...]) -> int:
+        with torch.no_grad():
+            x = torch.zeros(1, *obs_shape)
+            y = self.conv_trunk(x)
+            return y.reshape(1, -1).size(1)
 
     def forward(
             self,
             obs: Union[torch.Tensor, np.ndarray],
             state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        x = self._preprocess(obs)
-        B, L = x.shape[0], x.shape[1]  # Batch, Length
+        B, L = obs.shape[0], obs.shape[1]  # Batch, Length
 
         # Flatten time into batch for conv trunk
-        x = x.reshape(B * L, *x.shape[2:])  # (B*L, C, H, W)
+        x = obs.reshape(B * L, *obs.shape[2:])  # (B*L, C, H, W)
         feats = self.conv_trunk(x)  # (B*L, F)
-        feats = feats.view(B, L, -1)  # (B, L, F)
+        feats = feats.reshape(B, L, -1)  # (B, L, F)
 
         # LSTM over time
         if state is None or state == (None, None):
@@ -95,7 +88,7 @@ class ActorCritic(nn.Module):
             obs: Union[torch.Tensor, np.ndarray],
             state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[int, Tuple[torch.Tensor, torch.Tensor]]:
-        policy_logits, _, new_state = self.forward(obs, state)  # policy_logits: (B,L,A) or (1,1,A)
+        policy_logits, _, new_state = self.forward(obs, state)  # policy_logits: (B, L, A) or (1, 1, A)
         logits = policy_logits.reshape(-1, policy_logits.shape[-1])[-1]  # take last time step of last batch
         dist = torch.distributions.Categorical(logits=logits)
         action = int(dist.sample().item())

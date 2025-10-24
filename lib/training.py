@@ -2,13 +2,14 @@ import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn.functional as F
+from tensorboardX import SummaryWriter
 
 from lib.actor_critic import ActorCritic
 from lib.config import Config
 from lib.diffusion_model import DiffusionModel
 from lib.replay_buffer import ReplayBuffer
 from lib.reward_end_model import RewardEndModel
-from lib.utils import lambda_returns
+from lib.utils import lambda_returns, log_imagined_trajectories_video, log_env_rollout_video
 
 
 def training_loop(
@@ -20,20 +21,70 @@ def training_loop(
         actor_critic_network: ActorCritic,
         diffusion_model_optimizer: torch.optim.Optimizer,
         reward_end_model_optimizer: torch.optim.Optimizer,
-        actor_critic_network_optimizer: torch.optim.Optimizer
+        actor_critic_network_optimizer: torch.optim.Optimizer,
+        writer: SummaryWriter,
 ) -> None:
     for epoch in range(cfg.number_of_epochs):
         collect_experience(cfg, env, actor_critic_network, replay_buffer)
 
+        print(f"\n[Epoch {epoch}] update diffusion model")
+        diff_losses = []
+        step = epoch * cfg.training_steps_per_epoch
         for step_diffusion_model in range(cfg.training_steps_per_epoch):
-            print(update_diffusion_model(cfg, replay_buffer, diffusion_model, diffusion_model_optimizer))
+            diff_losses.append(
+                update_diffusion_model(cfg, replay_buffer, diffusion_model, diffusion_model_optimizer)
+            )
+            writer.add_scalar("diffusion_model/loss", diff_losses[-1], step)
+            step += 1
+        print(f"avg diffusion loss: {np.mean(diff_losses):.4f}")
 
+        print(f"[Epoch {epoch}] update reward end model")
+        rew_end_losses = []
+        step = epoch * cfg.training_steps_per_epoch
         for step_reward_end_model in range(cfg.training_steps_per_epoch):
-            print(update_reward_end_model(cfg, replay_buffer, reward_end_model, reward_end_model_optimizer))
+            rew_end_losses.append(
+                update_reward_end_model(cfg, replay_buffer, reward_end_model, reward_end_model_optimizer)
+            )
+            writer.add_scalar("reward_end_model/loss", rew_end_losses[-1], step)
+        print(f"avg reward end loss: {np.mean(rew_end_losses):.4f}")
 
+        print(f"[Epoch {epoch}] update actor critic network")
+        step = epoch * cfg.training_steps_per_epoch
+        ac_losses = []
         for step_actor_critic in range(cfg.training_steps_per_epoch):
-            print(update_actor_critic(cfg, replay_buffer, diffusion_model, reward_end_model, actor_critic_network,
-                                      actor_critic_network_optimizer))
+            ac_losses.append(
+                update_actor_critic(cfg, replay_buffer, diffusion_model, reward_end_model, actor_critic_network,
+                                    actor_critic_network_optimizer)
+            )
+            writer.add_scalar("actor_critic_network/loss", ac_losses[-1], step)
+        print(f"avg actor-critic loss: {np.mean(ac_losses):.4f}")
+
+        print(f"[Epoch {epoch}] done. Diffusion Loss: {np.mean(diff_losses):.4f}, "
+              f"Reward End Loss: {np.mean(rew_end_losses):.4f}, Actor-Critic Loss: {np.mean(ac_losses):.4f}")
+        writer.add_scalar("diffusion_model/avg_loss", float(np.mean(diff_losses)), step)
+        writer.add_scalar("reward_end_model/avg_loss", float(np.mean(rew_end_losses)), step)
+        writer.add_scalar("actor_critic_network/avg_loss", float(np.mean(ac_losses)), step)
+
+        # Real env rollout
+        try:
+            ep_ret, ep_len = log_env_rollout_video(
+                writer, env, actor_critic_network, cfg.device, step, tag="eval/rollout",
+            )
+            print(f"[Epoch {epoch}] eval video logged | return={ep_ret:.2f}, len={ep_len}")
+        except Exception as e:
+            print(f"[Epoch {epoch}] eval video logging FAILED: {e}")
+
+        # Imagined rollout
+        try:
+            log_imagined_trajectories_video(
+                cfg, writer, diffusion_model, reward_end_model, actor_critic_network, replay_buffer, step,
+                tag="imagine/rollout"
+            )
+            print(f"[Epoch {epoch}] imagined video logged")
+        except Exception as e:
+            print(f"[Epoch {epoch}] imagined video logging FAILED: {e}")
+
+        writer.flush()
 
 
 @torch.no_grad()
@@ -47,7 +98,8 @@ def collect_experience(
     h_t, c_t = None, None
     for t in range(cfg.environment_steps_per_epoch):
         # Sample action from the current actor_critic_network based on current_obs with epsilon-greedy exploration
-        act, (h_t, c_t) = actor_critic_network.sample_action(current_obs, (h_t, c_t))
+        current_obs_tensor = torch.tensor(current_obs, device=cfg.device).unsqueeze(0).unsqueeze(0).float() / 255.0
+        act, (h_t, c_t) = actor_critic_network.sample_action(current_obs_tensor, (h_t, c_t))
         if np.random.rand() < cfg.epsilon_greedy_for_collection:
             act = env.action_space.sample()
 
