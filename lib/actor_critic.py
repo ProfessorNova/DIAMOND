@@ -33,10 +33,16 @@ class ActorCritic(nn.Module):
         # Convolutional trunk
         layers_list = []
         in_channels = obs_shape[0]
-        for _, (block_layers, block_channels) in enumerate(zip(residual_blocks_layers, residual_blocks_channels)):
-            layers_list.append(ResidualBlock(in_channels, block_channels, block_layers))
+        for out_channels, num_layers in zip(residual_blocks_channels, residual_blocks_layers):
+            layers_list.append(
+                ResidualBlock(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    layers=num_layers,
+                )
+            )
             layers_list.append(nn.MaxPool2d(kernel_size=2, stride=2))
-            in_channels = block_channels
+            in_channels = out_channels
         self.conv_trunk = nn.Sequential(*layers_list)
         conv_output_size = self._get_conv_output_size(obs_shape)
 

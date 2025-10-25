@@ -18,7 +18,7 @@ def main():
     cfg = Config()
 
     register_envs(ale_py)
-    env = make_env(cfg)
+    env = make_env(cfg.env_id, cfg.image_size, cfg.frame_skip)
     obs_shape = env.observation_space.shape
     num_actions = env.action_space.n
 
@@ -39,6 +39,8 @@ def main():
         sigma_data=cfg.sigma_data,
     )
     diffusion_model.to(cfg.device)
+    diffusion_model = torch.compile(diffusion_model)
+    diffusion_model.sample_next_observation = torch.compile(diffusion_model.sample_next_observation)
 
     reward_end_model = RewardEndModel(
         obs_shape=obs_shape,
@@ -49,6 +51,7 @@ def main():
         lstm_dimensions=cfg.reward_termination_model_lstm_dimension,
     )
     reward_end_model.to(cfg.device)
+    reward_end_model = torch.compile(reward_end_model)
 
     actor_critic_network = ActorCritic(
         obs_shape=obs_shape,
@@ -58,6 +61,7 @@ def main():
         lstm_dimensions=cfg.actor_critic_model_lstm_dimension,
     )
     actor_critic_network.to(cfg.device)
+    actor_critic_network = torch.compile(actor_critic_network)
 
     # Print model parameter counts nicely formatted
     diffusion_params = sum(p.numel() for p in diffusion_model.parameters() if p.requires_grad)
@@ -94,8 +98,11 @@ def main():
         eps=cfg.epsilon,
     )
 
-    run_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    writer = SummaryWriter(log_dir=f"runs/{run_name}")
+    if cfg.create_artifacts:
+        run_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        writer = SummaryWriter(log_dir=f"runs/{run_name}")
+    else:
+        writer = None
 
     training_loop(
         cfg=cfg,

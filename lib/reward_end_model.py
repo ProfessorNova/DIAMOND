@@ -42,10 +42,9 @@ class RewardEndModel(nn.Module):
                     cond_dim=residual_blocks_conditioning_dimensions,
                 )
             )
+            layers_list.append(nn.MaxPool2d(kernel_size=2, stride=2))
             in_channels = out_channels
         self.convolutional_residual_blocks = nn.ModuleList(layers_list)
-
-        self.pool = nn.AdaptiveAvgPool2d(1)
 
         # Compute LSTM input size AFTER pooling (== last out_channels)
         conv_output_size = self._get_conv_output_size(obs_shape)
@@ -73,10 +72,12 @@ class RewardEndModel(nn.Module):
         with torch.no_grad():
             x = torch.zeros(1, *obs_shape)
             cond = torch.zeros(1, self.action_embedding.embedding_dim, device=x.device, dtype=x.dtype)
-            for block in self.convolutional_residual_blocks:
-                x = block(x, cond)  # (1, C_last, H, W)
-            x = self.pool(x)  # (1, C_last, 1, 1)
-            return x.reshape(1, -1).size(1)  # == C_last
+            for m in self.convolutional_residual_blocks:
+                if isinstance(m, ResidualBlock):
+                    x = m(x, cond_action=cond)
+                else:
+                    x = m(x)
+            return x.reshape(1, -1).size(1)
 
     def forward(
             self,
@@ -87,13 +88,16 @@ class RewardEndModel(nn.Module):
         B, L = obs.shape[0], obs.shape[1]
 
         # Action conditioning for AdaGN
-        cond = self.action_embedding(actions).reshape(B * L, -1)  # (B*L, cond_dim)
+        cond = self.action_embedding(actions).reshape(B * L, -1)  # (B*L, conditioning_dimensions)
 
         # Conv trunk (flatten time into batch), then pool away H,W
         x = obs.reshape(B * L, *obs.shape[2:])  # (B*L, C, H, W)
-        for block in self.convolutional_residual_blocks:
-            x = block(x, cond)  # (B*L, C_last, H, W)
-        x = self.pool(x).reshape(B, L, -1)  # (B, L, C_last)
+        for m in self.convolutional_residual_blocks:
+            if isinstance(m, ResidualBlock):
+                x = m(x, cond_action=cond)
+            else:
+                x = m(x)
+        x = x.reshape(B, L, -1)  # (B, L, conv_output_size)
 
         # LSTM over time
         out, (h, c) = self.lstm(x, None if state in (None, (None, None)) else state)

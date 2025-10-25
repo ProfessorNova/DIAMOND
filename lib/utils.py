@@ -5,8 +5,6 @@ import numpy as np
 import torch
 from tensorboardX import SummaryWriter
 
-from lib.config import Config
-
 
 class ImageToPyTorch(gym.ObservationWrapper):
     """HWC -> CHW for PyTorch, keeps dtype uint8."""
@@ -22,9 +20,30 @@ class ImageToPyTorch(gym.ObservationWrapper):
         return np.transpose(observation, (2, 0, 1))
 
 
-def make_env(cfg: Config) -> gym.Env:
-    env = gym.make(cfg.env_id)
-    env = gym.wrappers.ResizeObservation(env, cfg.image_size)
+class FrameSkip(gym.Wrapper):
+    def __init__(self, env, skip: int = 4):
+        super().__init__(env)
+        assert skip >= 1
+        self._skip = skip
+
+    def step(self, action):
+        total_reward = 0.0
+        obs = None
+        done = False
+        truncated = False
+        info = {}
+        for _ in range(self._skip):
+            obs, reward, done, truncated, info = self.env.step(action)
+            total_reward += reward
+            if done or truncated:
+                break
+        return obs, total_reward, done, truncated, info
+
+
+def make_env(env_id, image_size: Tuple[int, int] = (64, 64), frame_skip: int = 4) -> gym.Env:
+    env = gym.make(env_id)
+    env = FrameSkip(env, skip=frame_skip)
+    env = gym.wrappers.ResizeObservation(env, image_size)
     env = ImageToPyTorch(env)
     return env
 
@@ -164,7 +183,7 @@ def log_imagined_trajectories_video(
         replay_buffer,
         global_step: int,
         tag: str = "imagine/rollout",
-        horizon: int = 100,
+        horizon: int = 200,
         fps: int = 20,
 ):
     """

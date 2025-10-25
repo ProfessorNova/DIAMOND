@@ -10,6 +10,8 @@ class Config:
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env_id: str = "Breakout-v4"
     image_size: Tuple[int, int] = (64, 64)
+    frame_skip: int = 4
+    create_artifacts: bool = True
 
     # --- Hyperparameters ---
     # Training loop
@@ -53,7 +55,7 @@ class Config:
     reward_termination_model_residual_blocks_layers = [2, 2, 2, 2]
     reward_termination_model_residual_blocks_channels = [32, 32, 32, 32]
     reward_termination_model_residual_blocks_conditioning_dimensions = 128
-    reward_termination_model_lstm_dimension = 128
+    reward_termination_model_lstm_dimension = 512
 
     # Actor-Critic Model
     actor_critic_model_residual_blocks_layers = [1, 1, 1, 1]

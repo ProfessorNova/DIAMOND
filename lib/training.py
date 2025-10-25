@@ -1,3 +1,6 @@
+import time
+from typing import Optional
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -22,69 +25,84 @@ def training_loop(
         diffusion_model_optimizer: torch.optim.Optimizer,
         reward_end_model_optimizer: torch.optim.Optimizer,
         actor_critic_network_optimizer: torch.optim.Optimizer,
-        writer: SummaryWriter,
+        writer: Optional[SummaryWriter] = None,
 ) -> None:
+    env_steps = 0
     for epoch in range(cfg.number_of_epochs):
         collect_experience(cfg, env, actor_critic_network, replay_buffer)
+        env_steps += cfg.environment_steps_per_epoch
 
         print(f"\n[Epoch {epoch}] update diffusion model")
         diff_losses = []
         step = epoch * cfg.training_steps_per_epoch
+        time_start = time.time()
         for step_diffusion_model in range(cfg.training_steps_per_epoch):
             diff_losses.append(
                 update_diffusion_model(cfg, replay_buffer, diffusion_model, diffusion_model_optimizer)
             )
-            writer.add_scalar("diffusion_model/loss", diff_losses[-1], step)
+            if writer is not None:
+                writer.add_scalar("diffusion_model/loss", diff_losses[-1], step)
             step += 1
-        print(f"avg diffusion loss: {np.mean(diff_losses):.4f}")
+        time_end = time.time()
+        print(f"avg diffusion loss: {np.mean(diff_losses):.4f}, time: {time_end - time_start:.2f}s")
 
         print(f"[Epoch {epoch}] update reward end model")
         rew_end_losses = []
         step = epoch * cfg.training_steps_per_epoch
+        time_start = time.time()
         for step_reward_end_model in range(cfg.training_steps_per_epoch):
             rew_end_losses.append(
                 update_reward_end_model(cfg, replay_buffer, reward_end_model, reward_end_model_optimizer)
             )
-            writer.add_scalar("reward_end_model/loss", rew_end_losses[-1], step)
-        print(f"avg reward end loss: {np.mean(rew_end_losses):.4f}")
+            if writer is not None:
+                writer.add_scalar("reward_end_model/loss", rew_end_losses[-1], step)
+            step += 1
+        time_end = time.time()
+        print(f"avg reward end loss: {np.mean(rew_end_losses):.4f}, time: {time_end - time_start:.2f}s")
 
         print(f"[Epoch {epoch}] update actor critic network")
         step = epoch * cfg.training_steps_per_epoch
         ac_losses = []
+        time_start = time.time()
         for step_actor_critic in range(cfg.training_steps_per_epoch):
             ac_losses.append(
                 update_actor_critic(cfg, replay_buffer, diffusion_model, reward_end_model, actor_critic_network,
                                     actor_critic_network_optimizer)
             )
-            writer.add_scalar("actor_critic_network/loss", ac_losses[-1], step)
-        print(f"avg actor-critic loss: {np.mean(ac_losses):.4f}")
+            if writer is not None:
+                writer.add_scalar("actor_critic_network/loss", ac_losses[-1], step)
+            step += 1
+        time_end = time.time()
+        print(f"avg actor-critic loss: {np.mean(ac_losses):.4f}, time: {time_end - time_start:.2f}s")
 
         print(f"[Epoch {epoch}] done. Diffusion Loss: {np.mean(diff_losses):.4f}, "
               f"Reward End Loss: {np.mean(rew_end_losses):.4f}, Actor-Critic Loss: {np.mean(ac_losses):.4f}")
-        writer.add_scalar("diffusion_model/avg_loss", float(np.mean(diff_losses)), step)
-        writer.add_scalar("reward_end_model/avg_loss", float(np.mean(rew_end_losses)), step)
-        writer.add_scalar("actor_critic_network/avg_loss", float(np.mean(ac_losses)), step)
+        if writer is not None:
+            writer.add_scalar("diffusion_model/avg_loss", float(np.mean(diff_losses)), step)
+            writer.add_scalar("reward_end_model/avg_loss", float(np.mean(rew_end_losses)), step)
+            writer.add_scalar("actor_critic_network/avg_loss", float(np.mean(ac_losses)), step)
+            writer.add_scalar("env/total_steps", env_steps, epoch * cfg.environment_steps_per_epoch)
 
-        # Real env rollout
-        try:
-            ep_ret, ep_len = log_env_rollout_video(
-                writer, env, actor_critic_network, cfg.device, step, tag="eval/rollout",
-            )
-            print(f"[Epoch {epoch}] eval video logged | return={ep_ret:.2f}, len={ep_len}")
-        except Exception as e:
-            print(f"[Epoch {epoch}] eval video logging FAILED: {e}")
+            # Real env rollout
+            try:
+                ep_ret, ep_len = log_env_rollout_video(
+                    writer, env, actor_critic_network, cfg.device, step, tag="eval/rollout",
+                )
+                print(f"[Epoch {epoch}] eval video logged | return={ep_ret:.2f}, len={ep_len}")
+            except Exception as e:
+                print(f"[Epoch {epoch}] eval video logging FAILED: {e}")
 
-        # Imagined rollout
-        try:
-            log_imagined_trajectories_video(
-                cfg, writer, diffusion_model, reward_end_model, actor_critic_network, replay_buffer, step,
-                tag="imagine/rollout"
-            )
-            print(f"[Epoch {epoch}] imagined video logged")
-        except Exception as e:
-            print(f"[Epoch {epoch}] imagined video logging FAILED: {e}")
+            # Imagined rollout
+            try:
+                log_imagined_trajectories_video(
+                    cfg, writer, diffusion_model, reward_end_model, actor_critic_network, replay_buffer, step,
+                    tag="imagine/rollout"
+                )
+                print(f"[Epoch {epoch}] imagined video logged")
+            except Exception as e:
+                print(f"[Epoch {epoch}] imagined video logging FAILED: {e}")
 
-        writer.flush()
+            writer.flush()
 
 
 @torch.no_grad()
@@ -163,7 +181,7 @@ def update_diffusion_model(
     loss = F.mse_loss(prediction, target)
 
     # Update the diffusion model
-    diffusion_model_optimizer.zero_grad()
+    diffusion_model_optimizer.zero_grad(set_to_none=True)
     loss.backward()
     diffusion_model_optimizer.step()
 
@@ -204,7 +222,7 @@ def update_reward_end_model(
     loss = reward_loss + end_loss
 
     # Update the reward end model
-    reward_end_model_optimizer.zero_grad()
+    reward_end_model_optimizer.zero_grad(set_to_none=True)
     loss.backward()
     reward_end_model_optimizer.step()
 
@@ -229,7 +247,7 @@ def update_actor_critic(
     obs_burn = batch['observations'].float() / 255.0  # (B, L+1, C, H, W)
     acts_burn = batch['actions']
 
-    # Burn-in buffer with reward end model and actor_critic_network to initialize LSTM states
+    # Burn-in buffer with reward_end_model and actor_critic_network to initialize LSTM states
     h_r, c_r, h_ac, c_ac = None, None, None, None
     with torch.no_grad():
         _, _, (h_r, c_r) = reward_end_model(obs_burn[:, :L], acts_burn[:, :L])
@@ -238,28 +256,31 @@ def update_actor_critic(
     # Rolling variables for imagination
     obs_hist = obs_burn[:, -L_dm:].clone()  # (B, L_dm, C, H, W)
     act_hist = acts_burn[:, -L_dm:].clone()  # (B, L_dm)
-    x_i = obs_burn[:, L].clone()  # (B, C, H, W)
+    x_i = obs_burn[:, L].contiguous()  # (B, C, H, W)
 
-    # Lists to store imagined trajectories
-    values_list = []
-    log_prob_list = []
-    ent_list = []
-    rewards_list = []
-    done_list = []
+    # Store imagined trajectories
+    values = torch.empty(B, H + 1, device=cfg.device)
+    log_probs = torch.empty(B, H, device=cfg.device)
+    entropies = torch.empty(B, H, device=cfg.device)
+    rewards = torch.empty(B, H, device=cfg.device)
+    dones = torch.empty(B, H, device=cfg.device)
+
+    reward_vals = torch.tensor([-1.0, 0.0, 1.0], device=cfg.device)
 
     for i in range(H):
         # Sample action from the actor_critic_network
-        policy_logits_i, values_i, (h_ac, c_ac) = actor_critic_network(
-            x_i.unsqueeze(1), (h_ac, c_ac)
-        )
+        policy_logits_i, values_i, (h_ac, c_ac) = actor_critic_network(x_i.unsqueeze(1), (h_ac, c_ac))
         policy_logits_i = policy_logits_i.squeeze(1)  # (B, A)
         values_i = values_i.squeeze(1).squeeze(-1)  # (B,)
-        values_list.append(values_i)
+        values[:, i] = values_i
 
         dist = torch.distributions.Categorical(logits=policy_logits_i)
         act_i = dist.sample()  # (B,)
-        log_prob_list.append(dist.log_prob(act_i))  # (B,)
-        ent_list.append(dist.entropy())  # (B,)
+        log_prob_i = dist.log_prob(act_i)  # (B,)
+        ent_i = dist.entropy()  # (B,)
+
+        log_probs[:, i] = log_prob_i
+        entropies[:, i] = ent_i
 
         with torch.no_grad():
             # Sample reward r_i and termination d_i from reward_end_model
@@ -267,15 +288,16 @@ def update_actor_critic(
             reward_logits = reward_logits.squeeze(1)  # (B, 3)
             end_logits = end_logits.squeeze(1)  # (B, 2)
 
-            reward_vals = torch.tensor([-1.0, 0.0, 1.0], device=x_i.device)
-            reward_i = (F.softmax(reward_logits, dim=-1) * reward_vals).sum(-1)  # (B,)
-            done_i = F.softmax(end_logits, dim=-1)[..., 1]  # (B,)
-            rewards_list.append(reward_i)
-            done_list.append(done_i)
+            reward_prob = F.softmax(reward_logits, dim=-1)  # (B, 3)
+            rewards[:, i] = (reward_prob * reward_vals).sum(-1)  # (B,)
+            done_prob = F.softmax(end_logits, dim=-1)[:, 1]  # (B,)
+            dones[:, i] = done_prob  # (B,)
 
             # Update observation and action history to condition diffusion model with latest (x_i, a_i)
-            obs_hist = torch.cat([obs_hist[:, 1:], x_i.unsqueeze(1)], dim=1)  # (B, L_dm, C, H, W)
-            act_hist = torch.cat([act_hist[:, 1:], act_i.unsqueeze(1)], dim=1)  # (B, L_dm)
+            obs_hist[:, :-1].copy_(obs_hist[:, 1:])
+            obs_hist[:, -1].copy_(x_i)
+            act_hist[:, :-1].copy_(act_hist[:, 1:])
+            act_hist[:, -1].copy_(act_i)
 
             # Sample next observation x_{i+1} by reverse diffusion process with diffusion_model
             x_ip1 = diffusion_model.sample_next_observation(obs_hist, act_hist)  # (B, C, H, W)
@@ -285,24 +307,18 @@ def update_actor_critic(
 
     # Final bootstrap values from the last imagined observation
     with torch.no_grad():
-        _, values_H, _ = actor_critic_network(x_i.unsqueeze(1), (h_ac, c_ac))
-    values = torch.stack(values_list + [values_H.squeeze(1).squeeze(-1)], dim=1)  # (B, H+1)
-
-    # Stack buffers
-    log_prob_list = torch.stack(log_prob_list, dim=1)  # (B, H)
-    ent_list = torch.stack(ent_list, dim=1)  # (B, H)
-    rewards_list = torch.stack(rewards_list, dim=1)  # (B, H)
-    done_list = torch.stack(done_list, dim=1)  # (B, H)
+        _, vH, _ = actor_critic_network(x_i.unsqueeze(1), (h_ac, c_ac))
+    values[:, -1] = vH.squeeze(1).squeeze(-1)
 
     # Compute RL losses for actor_critic_network
-    returns = lambda_returns(rewards_list, done_list, values, cfg.discount_factor, cfg.lambda_returns_coefficient)
+    returns = lambda_returns(rewards, dones, values, cfg.discount_factor, cfg.lambda_returns_coefficient)
     value_loss = F.mse_loss(values[:, :-1], returns.detach())
     advantage = (returns - values[:, :-1]).detach()
-    policy_loss = -(log_prob_list * advantage + cfg.entropy_weight * ent_list).mean()
+    policy_loss = -(log_probs * advantage + cfg.entropy_weight * entropies).mean()
     loss = value_loss + policy_loss
 
     # Update actor_critic_network
-    actor_critic_network_optimizer.zero_grad()
+    actor_critic_network_optimizer.zero_grad(set_to_none=True)
     loss.backward()
     actor_critic_network_optimizer.step()
 
