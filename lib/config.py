@@ -8,17 +8,18 @@ import torch
 class Config:
     # --- General Settings ---
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env_id: str = "Breakout-v4"
+    env_id: str = "ALE/BeamRider-v5"
     image_size: Tuple[int, int] = (64, 64)
-    frame_skip: int = 4
     create_artifacts: bool = True
+    log_interval: int = 10  # in training steps
+    video_log_interval: int = 5  # in epochs
 
     # --- Hyperparameters ---
     # Training loop
     number_of_epochs: int = 1000
     training_steps_per_epoch: int = 400
     batch_size: int = 32
-    environment_steps_per_epoch: int = 100
+    environment_steps_per_epoch: int = 1000
     epsilon_greedy_for_collection: float = 0.01
 
     # RL hyperparameters

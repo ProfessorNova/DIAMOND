@@ -1,5 +1,5 @@
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
@@ -36,73 +36,120 @@ def training_loop(
         diff_losses = []
         step = epoch * cfg.training_steps_per_epoch
         time_start = time.time()
+
         for step_diffusion_model in range(cfg.training_steps_per_epoch):
-            diff_losses.append(
-                update_diffusion_model(cfg, replay_buffer, diffusion_model, diffusion_model_optimizer)
+
+            loss = update_diffusion_model(
+                cfg, replay_buffer, diffusion_model, diffusion_model_optimizer
             )
-            if writer is not None:
-                writer.add_scalar("diffusion_model/loss", diff_losses[-1], step)
+
+            diff_losses.append(loss)
+            if writer is not None and step % cfg.log_interval == 0:
+                writer.add_scalar("diffusion_model/loss", loss, step)
             step += 1
+
         time_end = time.time()
         print(f"avg diffusion loss: {np.mean(diff_losses):.4f}, time: {time_end - time_start:.2f}s")
 
         print(f"[Epoch {epoch}] update reward end model")
-        rew_end_losses = []
+        reward_end_losses = []
+        reward_losses = []
+        end_losses = []
         step = epoch * cfg.training_steps_per_epoch
         time_start = time.time()
+
         for step_reward_end_model in range(cfg.training_steps_per_epoch):
-            rew_end_losses.append(
-                update_reward_end_model(cfg, replay_buffer, reward_end_model, reward_end_model_optimizer)
+
+            loss, reward_loss, end_loss = update_reward_end_model(
+                cfg, replay_buffer, reward_end_model, reward_end_model_optimizer
             )
-            if writer is not None:
-                writer.add_scalar("reward_end_model/loss", rew_end_losses[-1], step)
+            reward_end_losses.append(loss)
+            reward_losses.append(reward_loss)
+            end_losses.append(end_loss)
+            if writer is not None and step % cfg.log_interval == 0:
+                writer.add_scalar("reward_end_model/loss", loss, step)
+                writer.add_scalar("reward_end_model/reward_loss", reward_loss, step)
+                writer.add_scalar("reward_end_model/end_loss", end_loss, step)
             step += 1
+
         time_end = time.time()
-        print(f"avg reward end loss: {np.mean(rew_end_losses):.4f}, time: {time_end - time_start:.2f}s")
+        print(f"avg reward end loss: {np.mean(reward_end_losses):.4f}, time: {time_end - time_start:.2f}s")
 
         print(f"[Epoch {epoch}] update actor critic network")
         step = epoch * cfg.training_steps_per_epoch
-        ac_losses = []
+        actor_critic_losses = []
+        policy_losses = []
+        value_losses = []
+        entropies = []
+        values = []
+        advantages = []
+
         time_start = time.time()
+
         for step_actor_critic in range(cfg.training_steps_per_epoch):
-            ac_losses.append(
-                update_actor_critic(cfg, replay_buffer, diffusion_model, reward_end_model, actor_critic_network,
-                                    actor_critic_network_optimizer)
+
+            loss, policy_loss, value_loss, entropy, value, advantage = update_actor_critic(
+                cfg, replay_buffer, diffusion_model, reward_end_model, actor_critic_network,
+                actor_critic_network_optimizer
             )
-            if writer is not None:
-                writer.add_scalar("actor_critic_network/loss", ac_losses[-1], step)
+            actor_critic_losses.append(loss)
+            policy_losses.append(policy_loss)
+            value_losses.append(value_loss)
+            entropies.append(entropy)
+            values.append(value)
+            advantages.append(advantage)
+            if writer is not None and step % cfg.log_interval == 0:
+                writer.add_scalar("actor_critic_network/loss", loss, step)
+                writer.add_scalar("actor_critic_network/policy_loss", policy_loss, step)
+                writer.add_scalar("actor_critic_network/value_loss", value_loss, step)
+                writer.add_scalar("actor_critic_network/entropy", entropy, step)
+                writer.add_scalar("actor_critic_network/value", value, step)
+                writer.add_scalar("actor_critic_network/advantage", advantage, step)
             step += 1
+
         time_end = time.time()
-        print(f"avg actor-critic loss: {np.mean(ac_losses):.4f}, time: {time_end - time_start:.2f}s")
+        print(f"avg actor-critic loss: {np.mean(actor_critic_losses):.4f}, time: {time_end - time_start:.2f}s")
 
         print(f"[Epoch {epoch}] done. Diffusion Loss: {np.mean(diff_losses):.4f}, "
-              f"Reward End Loss: {np.mean(rew_end_losses):.4f}, Actor-Critic Loss: {np.mean(ac_losses):.4f}")
+              f"Reward End Loss: {np.mean(reward_end_losses):.4f}, Actor-Critic Loss: {np.mean(actor_critic_losses):.4f}")
+
         if writer is not None:
             writer.add_scalar("diffusion_model/avg_loss", float(np.mean(diff_losses)), step)
-            writer.add_scalar("reward_end_model/avg_loss", float(np.mean(rew_end_losses)), step)
-            writer.add_scalar("actor_critic_network/avg_loss", float(np.mean(ac_losses)), step)
-            writer.add_scalar("env/total_steps", env_steps, epoch * cfg.environment_steps_per_epoch)
 
-            # Real env rollout
-            try:
-                ep_ret, ep_len = log_env_rollout_video(
-                    writer, env, actor_critic_network, cfg.device, step, tag="eval/rollout",
-                )
-                print(f"[Epoch {epoch}] eval video logged | return={ep_ret:.2f}, len={ep_len}")
-            except Exception as e:
-                print(f"[Epoch {epoch}] eval video logging FAILED: {e}")
+            writer.add_scalar("reward_end_model/avg_loss", float(np.mean(reward_end_losses)), step)
+            writer.add_scalar("reward_end_model/avg_reward_loss", float(np.mean(reward_losses)), step)
+            writer.add_scalar("reward_end_model/avg_end_loss", float(np.mean(end_losses)), step)
 
-            # Imagined rollout
-            try:
-                log_imagined_trajectories_video(
-                    cfg, writer, diffusion_model, reward_end_model, actor_critic_network, replay_buffer, step,
-                    tag="imagine/rollout"
-                )
-                print(f"[Epoch {epoch}] imagined video logged")
-            except Exception as e:
-                print(f"[Epoch {epoch}] imagined video logging FAILED: {e}")
+            writer.add_scalar("actor_critic_network/avg_loss", float(np.mean(actor_critic_losses)), step)
+            writer.add_scalar("actor_critic_network/avg_policy_loss", float(np.mean(policy_losses)), step)
+            writer.add_scalar("actor_critic_network/avg_value_loss", float(np.mean(value_losses)), step)
+            writer.add_scalar("actor_critic_network/avg_entropy", float(np.mean(entropies)), step)
+            writer.add_scalar("actor_critic_network/avg_value", float(np.mean(values)), step)
+            writer.add_scalar("actor_critic_network/avg_advantage", float(np.mean(advantages)), step)
 
-            writer.flush()
+            writer.add_scalar("env/total_steps", env_steps, step)
+
+            if epoch % cfg.video_log_interval == 0:
+                # Real env rollout
+                try:
+                    ep_ret, ep_len = log_env_rollout_video(
+                        writer, env, actor_critic_network, cfg.device, step, tag="eval/rollout",
+                    )
+                    print(f"[Epoch {epoch}] eval video logged | return={ep_ret:.2f}, len={ep_len}")
+                except Exception as e:
+                    print(f"[Epoch {epoch}] eval video logging FAILED: {e}")
+
+                # Imagined rollout
+                try:
+                    log_imagined_trajectories_video(
+                        cfg, writer, diffusion_model, reward_end_model, actor_critic_network, replay_buffer, step,
+                        tag="imagine/rollout"
+                    )
+                    print(f"[Epoch {epoch}] imagined video logged")
+                except Exception as e:
+                    print(f"[Epoch {epoch}] imagined video logging FAILED: {e}")
+
+                writer.flush()
 
 
 @torch.no_grad()
@@ -193,7 +240,7 @@ def update_reward_end_model(
         replay_buffer: ReplayBuffer,
         reward_end_model: RewardEndModel,
         reward_end_model_optimizer: torch.optim.Optimizer
-) -> float:
+) -> Tuple[float, float, float]:
     B = cfg.batch_size
     L = cfg.reward_termination_model_burn_in_length
     H = cfg.imagination_horizon
@@ -226,7 +273,7 @@ def update_reward_end_model(
     loss.backward()
     reward_end_model_optimizer.step()
 
-    return loss.item()
+    return loss.item(), reward_loss.item(), end_loss.item()
 
 
 def update_actor_critic(
@@ -236,7 +283,7 @@ def update_actor_critic(
         reward_end_model: RewardEndModel,
         actor_critic_network: ActorCritic,
         actor_critic_network_optimizer: torch.optim.Optimizer
-) -> float:
+) -> Tuple[float, float, float, float, float, float]:
     B = cfg.batch_size
     L = cfg.actor_critic_model_burn_in_length
     L_dm = cfg.diffusion_model_number_of_conditioning_observations_and_actions
@@ -322,4 +369,4 @@ def update_actor_critic(
     loss.backward()
     actor_critic_network_optimizer.step()
 
-    return loss.item()
+    return loss.item(), value_loss.item(), policy_loss.item(), entropies.mean().item(), values.mean().item(), advantage.mean().item()

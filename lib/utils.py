@@ -20,29 +20,32 @@ class ImageToPyTorch(gym.ObservationWrapper):
         return np.transpose(observation, (2, 0, 1))
 
 
-class FrameSkip(gym.Wrapper):
-    def __init__(self, env, skip: int = 4):
+class NoopResetEnv(gym.Wrapper):
+    def __init__(self, env: gym.Env, max_noop: int = 30, noop_action: int = 0):
         super().__init__(env)
-        assert skip >= 1
-        self._skip = skip
+        assert max_noop >= 1
+        self.max_noop = int(max_noop)
+        self.noop_action = int(noop_action)
 
-    def step(self, action):
-        total_reward = 0.0
-        obs = None
-        done = False
-        truncated = False
-        info = {}
-        for _ in range(self._skip):
-            obs, reward, done, truncated, info = self.env.step(action)
-            total_reward += reward
-            if done or truncated:
-                break
-        return obs, total_reward, done, truncated, info
+    def reset(self, *, seed=None, options=None):
+        obs, info = self.env.reset(seed=seed, options=options)
+
+        noops = np.random.randint(1, self.max_noop + 1)
+        for _ in range(noops):
+            obs, reward, terminated, truncated, info = self.env.step(self.noop_action)
+            if terminated or truncated:
+                obs, info = self.env.reset(seed=seed, options=options)
+        return obs, info
 
 
-def make_env(env_id, image_size: Tuple[int, int] = (64, 64), frame_skip: int = 4) -> gym.Env:
+def make_env(
+        env_id,
+        image_size: Tuple[int, int] = (64, 64),
+        max_noop: int = 30,
+        noop_action: int = 0
+) -> gym.Env:
     env = gym.make(env_id)
-    env = FrameSkip(env, skip=frame_skip)
+    env = NoopResetEnv(env, max_noop=max_noop, noop_action=noop_action)
     env = gym.wrappers.ResizeObservation(env, image_size)
     env = ImageToPyTorch(env)
     return env
@@ -183,7 +186,7 @@ def log_imagined_trajectories_video(
         replay_buffer,
         global_step: int,
         tag: str = "imagine/rollout",
-        horizon: int = 200,
+        horizon: int = 1000,
         fps: int = 20,
 ):
     """

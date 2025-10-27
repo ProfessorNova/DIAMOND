@@ -34,13 +34,13 @@ class ActorCritic(nn.Module):
         layers_list = []
         in_channels = obs_shape[0]
         for out_channels, num_layers in zip(residual_blocks_channels, residual_blocks_layers):
-            layers_list.append(
-                ResidualBlock(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    layers=num_layers,
+            for i in range(num_layers):
+                layers_list.append(
+                    ResidualBlock(
+                        in_channels=in_channels if i == 0 else out_channels,
+                        out_channels=out_channels,
+                    )
                 )
-            )
             layers_list.append(nn.MaxPool2d(kernel_size=2, stride=2))
             in_channels = out_channels
         self.conv_trunk = nn.Sequential(*layers_list)

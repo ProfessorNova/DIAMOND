@@ -18,7 +18,7 @@ def main():
     cfg = Config()
 
     register_envs(ale_py)
-    env = make_env(cfg.env_id, cfg.image_size, cfg.frame_skip)
+    env = make_env(cfg.env_id, cfg.image_size)
     obs_shape = env.observation_space.shape
     num_actions = env.action_space.n
 

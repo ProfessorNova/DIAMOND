@@ -1,4 +1,3 @@
-import math
 from typing import Tuple, List, Optional
 
 import torch
@@ -34,14 +33,14 @@ class RewardEndModel(nn.Module):
         layers_list = []
         in_channels = obs_shape[0]
         for out_channels, num_layers in zip(residual_blocks_channels, residual_blocks_layers):
-            layers_list.append(
-                ResidualBlock(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    layers=num_layers,
-                    cond_dim=residual_blocks_conditioning_dimensions,
+            for i in range(num_layers):
+                layers_list.append(
+                    ResidualBlock(
+                        in_channels=in_channels if i == 0 else out_channels,
+                        out_channels=out_channels,
+                        cond_action_dim=residual_blocks_conditioning_dimensions,
+                    )
                 )
-            )
             layers_list.append(nn.MaxPool2d(kernel_size=2, stride=2))
             in_channels = out_channels
         self.convolutional_residual_blocks = nn.ModuleList(layers_list)
@@ -57,16 +56,10 @@ class RewardEndModel(nn.Module):
         self.termination_head = nn.Linear(lstm_dimensions, 2)
 
         # Initialize heads
-        # reward_head: classes [-1, 0, +1]
-        p_zero = 0.90
-        p_neg = p_pos = (1.0 - p_zero) / 2.0
-        nn.init.normal_(self.reward_head.weight, std=0.01)
-        self.reward_head.bias.data = torch.log(torch.tensor([p_neg, p_zero, p_pos], dtype=torch.float))
-        # termination_head: [not-done, done]
-        p_done = 0.05
-        nn.init.normal_(self.termination_head.weight, std=0.01)
-        logit_done = math.log(p_done / (1.0 - p_done))
-        self.termination_head.bias.data = torch.tensor([0.0, logit_done], dtype=torch.float)
+        nn.init.zeros_(self.reward_head.weight)
+        nn.init.zeros_(self.reward_head.bias)
+        nn.init.zeros_(self.termination_head.weight)
+        nn.init.zeros_(self.termination_head.bias)
 
     def _get_conv_output_size(self, obs_shape):
         with torch.no_grad():

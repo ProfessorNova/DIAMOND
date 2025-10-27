@@ -105,93 +105,84 @@ class DiffusionModel(nn.Module):
 
         # Down path
         downs = []
-        in_ch = residual_blocks_channels[0]
-        for idx, (out_ch, n_layers) in enumerate(zip(residual_blocks_channels, residual_blocks_layers)):
-            downs.append(
-                ResidualBlock(
-                    in_channels=in_ch,
-                    out_channels=out_ch,
-                    layers=n_layers,
-                    cond_dim=self.cond_dim
+        in_channels = residual_blocks_channels[0]
+        for idx, (out_channels, num_layers) in enumerate(zip(residual_blocks_channels, residual_blocks_layers)):
+            for i in range(num_layers):
+                downs.append(
+                    ResidualBlock(
+                        in_channels=in_channels if i == 0 else out_channels,
+                        out_channels=out_channels,
+                        cond_time_dim=self.cond_dim,
+                        cond_action_dim=self.cond_dim,
+                    )
                 )
-            )
-            downs.append(
-                ResidualBlock(
-                    in_channels=out_ch,
-                    out_channels=out_ch,
-                    layers=n_layers,
-                    cond_dim=self.cond_dim
-                )
-            )
             # Downsample except for last block
             if idx < len(residual_blocks_channels) - 1:
-                next_ch = residual_blocks_channels[idx + 1]
-                downs.append(Downsample(out_ch, next_ch))
-                in_ch = next_ch
+                next_channels = residual_blocks_channels[idx + 1]
+                downs.append(Downsample(out_channels, next_channels))
+                in_channels = next_channels
         self.down = nn.ModuleList(downs)
 
         # Bottleneck
         self.mid = nn.ModuleList([
             ResidualBlock(
-                in_channels=in_ch,
-                out_channels=in_ch,
-                cond_dim=self.cond_dim
+                in_channels=in_channels,
+                out_channels=in_channels,
+                cond_time_dim=self.cond_dim,
+                cond_action_dim=self.cond_dim
             ),
             ResidualBlock(
-                in_channels=in_ch,
-                out_channels=in_ch,
-                cond_dim=self.cond_dim
+                in_channels=in_channels,
+                out_channels=in_channels,
+                cond_time_dim=self.cond_dim,
+                cond_action_dim=self.cond_dim
             ),
         ])
 
         # Up path
         ups = []
         num_scales = len(residual_blocks_channels)
-        in_ch_up = in_ch
+        in_channels_up = in_channels
         for level in reversed(range(num_scales)):
-            out_ch = residual_blocks_channels[level]
-            n_layers = residual_blocks_layers[level]
+            out_channels = residual_blocks_channels[level]
+            num_layers = residual_blocks_layers[level]
 
-            if level == num_scales - 1:
-                in_cur = in_ch_up
-            else:
-                in_cur = in_ch_up + out_ch
+            # Deepest level uses only the input from the bottleneck (no skip connection)
+            # Other levels concatenate skip connection from down path
+            first_in = in_channels_up if level == num_scales - 1 else (in_channels_up + out_channels)
 
             # First block at this scale
-            ups.append(
-                ResidualBlock(
-                    in_channels=in_cur,
-                    out_channels=out_ch,
-                    layers=n_layers,
-                    cond_dim=self.cond_dim
+            for i in range(num_layers):
+                ups.append(
+                    ResidualBlock(
+                        in_channels=first_in if i == 0 else out_channels,
+                        out_channels=out_channels,
+                        cond_time_dim=self.cond_dim,
+                        cond_action_dim=self.cond_dim,
+                    )
                 )
-            )
-            ups.append(
-                ResidualBlock(
-                    in_channels=out_ch,
-                    out_channels=out_ch,
-                    layers=n_layers,
-                    cond_dim=self.cond_dim
-                )
-            )
-            in_cur = out_ch
 
+            # Upsample to the next res level, except for the final level
             if level > 0:
-                ups.append(Upsample(in_cur, residual_blocks_channels[level - 1]))
-                in_ch_up = residual_blocks_channels[level - 1]
+                next_channels = residual_blocks_channels[level - 1]
+                ups.append(Upsample(out_channels, next_channels))
+                in_channels_up = next_channels
             else:
-                in_ch_up = in_cur
+                # final level output channels
+                in_channels_up = out_channels
         self.up = nn.ModuleList(ups)
 
         # Head
-        self.conv_out = nn.Conv2d(in_ch_up, self.obs_channels, kernel_size=1, bias=False)
+        self.conv_out = nn.Conv2d(in_channels_up, self.obs_channels, kernel_size=1, bias=False)
 
     def _build_conditions(self, c_noise, act_cond):
         B = c_noise.shape[0]
         n_emb = sinusoidal_embedding(c_noise.reshape(B), dim=self.cond_dim)  # (B, D)
 
         acts = self.action_embedding(act_cond)  # (B, L, D)
-        pos = sinusoidal_embedding(torch.arange(self.L, device=acts.device), dim=self.cond_dim)  # (L, D)
+        pos = sinusoidal_embedding(
+            torch.arange(self.L, device=acts.device, dtype=acts.dtype), dim=self.cond_dim
+        )  # (L, D)
 
         acts_pe = acts + pos.unsqueeze(0)  # (B, L, D)
         a_emb = self.action_pe_proj(acts_pe.reshape(B, self.L * self.cond_dim))  # (B, D)
@@ -252,7 +243,8 @@ class DiffusionModel(nn.Module):
         assert W == self.W
 
         # init noise
-        x = torch.randn(B, C, H, W, device=device, dtype=dtype) * math.exp(self.p_mean + self.p_std * 1.0)
+        sigma0 = (1.0 / self.inv_sigma_all[0]).to(device=device, dtype=dtype)
+        x = torch.randn(B, C, H, W, device=device, dtype=dtype) * sigma0
 
         for i in range(self.num_denoising_steps):
             c_in = self.c_in_all[i]
@@ -260,7 +252,7 @@ class DiffusionModel(nn.Module):
             c_skip = self.c_skip_all[i]
             inv_sig = self.inv_sigma_all[i]
             delta = self.delta_all[i]
-            c_noise = self.c_noise_all[i].expand(B, 1, 1, 1)
+            c_noise = self.c_noise_all[i].expand(B)
 
             F_pred = self.forward(c_in * x, c_noise, obs_hist, act_hist)
             denoised = c_skip * x + c_out * F_pred
