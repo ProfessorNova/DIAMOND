@@ -39,6 +39,7 @@ class RewardEndModel(nn.Module):
                         in_channels=in_channels if i == 0 else out_channels,
                         out_channels=out_channels,
                         cond_action_dim=residual_blocks_conditioning_dimensions,
+                        zero_init_last=False
                     )
                 )
             layers_list.append(nn.MaxPool2d(kernel_size=2, stride=2))

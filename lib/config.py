@@ -17,7 +17,7 @@ class Config:
     # --- Hyperparameters ---
     # Training loop
     number_of_epochs: int = 1000
-    training_steps_per_epoch: int = 400
+    training_steps_per_epoch: int = 4000
     batch_size: int = 32
     environment_steps_per_epoch: int = 1000
     epsilon_greedy_for_collection: float = 0.01
